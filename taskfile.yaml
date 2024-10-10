@@ -1,0 +1,56 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+version: "3"
+
+tasks:
+     dev:
+          desc: "run dev go application"
+          dir: "cmd"
+          dotenv: ["../.env"]
+          cmd: "go run ex0tr/main.go"
+
+     lint:
+          run: once
+          desc: "run golanci-lint and govet"
+          sources:
+               - "**/*.go"
+          cmds:
+               - golangci-lint run
+               - go vet ./...
+
+     dup:
+          desc: "up docker container"
+          sources:
+               - compose.yaml
+          cmd: docker compose up --build -d
+
+     dvd:
+          desc: "down docker and remove volumes container"
+          sources:
+               - compose.yaml
+          cmd: docker compose down -v
+
+     testv:
+          run: once
+          desc: "run unit test --verbose"
+          sources:
+               - "**/*_test.go"
+          cmd: go test -v --race -coverprofile=coverage.out ./...
+
+     unit_test:
+          run: once
+          desc: "run unit test"
+          sources:
+               - "**/*_test.go"
+          cmd: go test --race -coverprofile=coverage.out ./...
+
+     benchmark:
+          desc: "run benchmark"
+          sources:
+               - "**/*_test.go"
+          cmd: go test --race -cpu=1,2,3,4,6,8 -bench=. -benchmem ./...
+
+     coverage:
+          desc: "display coverage out in html"
+          sources:
+               - "coverage.out"
+          cmd: go tool cover -html=coverage.out
