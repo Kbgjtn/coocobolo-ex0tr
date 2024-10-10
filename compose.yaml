@@ -1,0 +1,146 @@
+services:
+     dbmaster:
+          container_name: dbmaster
+          image: postgres
+          user: postgres
+          restart: always
+          healthcheck:
+               test: "pg_isready -U user --dbname=postgres"
+               interval: 10s
+               timeout: 5s
+               retries: 5
+          volumes:
+               - master-data:/var/lib/postgresql/data
+               - ./build/postgres/00_init.sql:/docker-entrypoint-initdb.d/00_init.sql
+          environment:
+               POSTGRES_USER: user
+               POSTGRES_DB: postgres
+               POSTGRES_PASSWORD: password
+               POSTGRES_HOST_AUTH_METHOD: "scram-sha-256\nhost replication all 0.0.0.0/0 md5"
+               POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+          command: |
+               postgres
+               -c wal_level=replica
+               -c hot_standby=on
+               -c max_wal_senders=10
+               -c max_replication_slots=10
+               -c hot_standby_feedback=on
+          ports:
+               - 15432:5432
+          networks:
+               - intranet
+
+     dbslave:
+          container_name: dbslave
+          image: postgres
+          user: postgres
+          restart: always
+          healthcheck:
+               test: "pg_isready -U user --dbname=postgres"
+               interval: 10s
+               timeout: 5s
+               retries: 5
+          environment:
+               PGUSER: replicator
+               PGPASSWORD: replicator_password
+               PGHOST: dbmaster
+               PGPORT: 5432
+               PGDATABASE: postgres
+          volumes:
+               - slave-data:/var/lib/postgresql/data
+          ports:
+               - 15433:5432
+          command: |
+               bash -c "
+               until pg_basebackup --pgdata=/var/lib/postgresql/data -R --slot=replication_slot --host=dbmaster --port=5432
+               do
+               echo 'Waiting for primary to connect...'
+               sleep 1s
+               done
+               echo 'Backup done, starting replica...'
+               chmod 0700 /var/lib/postgresql/data
+               postgres
+               "
+          depends_on:
+               - dbmaster
+          networks:
+               - intranet
+
+     api-ex0tr:
+          image: api.ex0tr
+          container_name: "api.ex0tr"
+          restart: on-failure:3
+          env_file:
+               - ".env"
+          build:
+               dockerfile: "build/docker/local.Dockerfile"
+               tags:
+                    - "api.ex0tr:v1.0"
+               args:
+                    path: "cmd/ex0tr/main.go"
+          ports:
+               - 5000:5000
+          networks:
+               - intranet
+
+     zookeeper1:
+          image: bitnami/zookeeper:3.7.0-debian-10-r264
+          platform: linux/amd64
+          volumes:
+               - zookeeper1:/bitnami/zookeeper
+          environment:
+               - ALLOW_ANONYMOUS_LOGIN=yes
+               - ZOOKEEPER_CLIENT_PORT=2181
+               - ZOOKEEPER_TICK_TIME=2000
+          ports:
+               - 2181:2181
+          networks:
+               intranet:
+                    aliases:
+                         - "zookeeper"
+
+     kafka1:
+          image: bitnami/kafka:2.8.0-debian-10-r84
+          platform: linux/amd64
+          volumes:
+               - kafka1:/bitnami/kafka
+          depends_on:
+               - zookeeper1
+          environment:
+               - KAFKA_CFG_ZOOKEEPER_CONNECT=zookeeper:2181
+               - ALLOW_PLAINTEXT_LISTENER=yes
+               - KAFKA_INTER_BROKER_LISTENER_NAME=INTERNAL
+               - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=INTERNAL:PLAINTEXT,CLIENT:PLAINTEXT
+               - KAFKA_CFG_LISTENERS=INTERNAL://:9093,CLIENT://:9092
+               - KAFKA_CFG_ADVERTISED_LISTENERS=INTERNAL://kafka1:9093,CLIENT://kafka1:9092
+          ports:
+               - 9092:9092
+               - 9093:9093
+          networks:
+               intranet:
+                    aliases:
+                         - "kafka"
+                         - "broker"
+
+     akhq:
+          image: tchiotludo/akhq:0.24.0
+          environment:
+               AKHQ_CONFIGURATION: |
+                    akhq:
+                      connections:
+                        docker-kafka-server:
+                          properties:
+                            bootstrap.servers: "kafka1:9092"
+          ports:
+               - 8080:8080
+          networks:
+               intranet:
+
+volumes:
+     zookeeper1:
+     kafka1:
+     master-data:
+     slave-data:
+
+networks:
+     intranet:
